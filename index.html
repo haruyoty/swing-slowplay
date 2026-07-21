@@ -1,0 +1,351 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>スイング再生ツール</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff;
+    font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+    overflow: hidden; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background:#000; }
+  video, #dcanvas { position:absolute; max-width: 100%; max-height: 100%; width: auto; height: auto; }
+  .mirror { transform: scaleX(-1); }
+  .hidden { display: none !important; }
+
+  /* モード切替（上部） */
+  #modes { position: fixed; top: calc(env(safe-area-inset-top) + 10px); left: 50%; transform: translateX(-50%);
+    display: flex; gap: 6px; padding: 4px; border-radius: 999px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px); }
+  #modes button { padding: 8px 16px; border-radius: 999px; border: none; background: transparent; color: #ddd;
+    font-size: 14px; font-weight: 700; }
+  #modes button.on { background: #fff; color: #000; }
+
+  /* 状態表示 */
+  #badge { position: fixed; top: calc(env(safe-area-inset-top) + 58px); left: 50%; transform: translateX(-50%);
+    padding: 5px 14px; border-radius: 999px; font-size: 14px; font-weight: 700; letter-spacing: .04em;
+    background: rgba(0,0,0,.5); backdrop-filter: blur(6px); }
+  #badge.live { color: #6ee7ff; }
+  #badge.rec  { color: #ff5a5a; }
+  #badge.play { color: #7dff8a; }
+  #badge.wait { color: #ffd166; }
+  #dot { display:inline-block; width:9px; height:9px; border-radius:50%; background: currentColor; margin-right:7px; vertical-align: 1px; }
+  #badge.rec #dot { animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* 下部コントロール */
+  #controls { position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 14px 16px calc(env(safe-area-inset-bottom) + 14px);
+    display: flex; flex-direction: column; gap: 12px;
+    background: linear-gradient(to top, rgba(0,0,0,.78), rgba(0,0,0,0)); }
+  .row { display: flex; align-items: center; justify-content: center; gap: 12px; }
+
+  /* 大きな中央ボタン */
+  #recBtn { width: 78px; height: 78px; border-radius: 50%; border: 5px solid #fff;
+    background: #ff3b30; flex: 0 0 auto; transition: border-radius .15s; }
+  #recBtn:active { transform: scale(.94); }
+  #recBtn.active { border-radius: 18px; }
+
+  .side { display:flex; flex-direction:column; align-items:center; gap:4px; flex:1; }
+  .side button { width: 56px; height: 56px; border-radius: 50%; border: none;
+    background: rgba(255,255,255,.15); color:#fff; font-size: 22px; }
+  .side button:active { background: rgba(255,255,255,.3); }
+  .side span { font-size: 11px; color:#cfcfcf; }
+
+  /* ピル型の選択ボタン群 */
+  .pills { display:flex; gap:8px; justify-content:center; }
+  .pills button { padding: 7px 12px; border-radius: 999px; border:1px solid rgba(255,255,255,.25);
+    background: transparent; color:#fff; font-size: 13px; font-weight:600; }
+  .pills button.on { background:#fff; color:#000; border-color:#fff; }
+
+  #hint { text-align:center; font-size:12px; color:#bbb; min-height: 15px; }
+
+  /* 初期の許可オーバーレイ */
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 20px; padding: 24px; text-align: center; background: #000; z-index: 10; }
+  #start h1 { font-size: 22px; margin: 0; }
+  #start p { color:#bbb; font-size: 14px; margin: 0; max-width: 320px; line-height: 1.6; }
+  #startBtn { padding: 16px 34px; border-radius: 999px; border:none; background:#6ee7ff; color:#000;
+    font-size: 17px; font-weight: 700; }
+  #err { color:#ff8a8a; font-size:13px; max-width: 320px; }
+</style>
+
+<div id="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="dcanvas" class="hidden"></canvas>
+</div>
+
+<div id="modes">
+  <button id="modeRecord" class="on">録画再生</button>
+  <button id="modeDelay">遅延ミラー</button>
+</div>
+
+<div id="badge" class="live"><span id="dot"></span><span id="badgeText">ライブ</span></div>
+
+<div id="controls">
+  <div id="hint"></div>
+
+  <!-- 録画モードのスピード -->
+  <div class="pills" id="speeds">
+    <button data-speed="0.25">0.25x</button>
+    <button data-speed="0.5" class="on">0.5x</button>
+    <button data-speed="1">1x</button>
+  </div>
+
+  <!-- 遅延モードの遅延秒数 -->
+  <div class="pills hidden" id="delays">
+    <button data-delay="2000">2秒</button>
+    <button data-delay="4000" class="on">4秒</button>
+    <button data-delay="6000">6秒</button>
+  </div>
+
+  <div class="row">
+    <div class="side">
+      <button id="flipBtn" title="カメラ切替">⟳</button>
+      <span>カメラ</span>
+    </div>
+    <button id="recBtn" title="録画"></button>
+    <div class="side">
+      <button id="liveBtn" title="ライブに戻る">▶</button>
+      <span id="liveLabel">ライブ</span>
+    </div>
+  </div>
+</div>
+
+<div id="start">
+  <h1>⛳ スイング再生ツール</h1>
+  <p>スマホのカメラでスイングを撮影し、その場でスロー再生／遅延ミラーで確認できます。「開始」を押してカメラの使用を許可してください。</p>
+  <button id="startBtn">開始</button>
+  <div id="err"></div>
+</div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const video   = $('#video');
+  const dcanvas = $('#dcanvas');
+  const dctx    = dcanvas.getContext('2d');
+  const badge   = $('#badge');
+  const badgeText = $('#badgeText');
+  const recBtn  = $('#recBtn');
+  const flipBtn = $('#flipBtn');
+  const liveBtn = $('#liveBtn');
+  const liveLabel = $('#liveLabel');
+  const hint    = $('#hint');
+  const startEl = $('#start');
+  const startBtn= $('#startBtn');
+  const errEl   = $('#err');
+  const speedsEl= $('#speeds');
+  const delaysEl= $('#delays');
+  const modeRecordBtn = $('#modeRecord');
+  const modeDelayBtn  = $('#modeDelay');
+  const speedBtns = [...speedsEl.querySelectorAll('button')];
+  const delayBtns = [...delaysEl.querySelectorAll('button')];
+
+  let stream = null;
+  let facing = 'environment';   // 'environment'=背面, 'user'=前面
+  let uiMode = 'record';        // 'record' | 'delay'
+
+  // 録画モード
+  let recorder = null, chunks = [], recording = false, playbackURL = null;
+  let playSpeed = 0.5, recState = 'live';   // 'live' | 'playback'
+  let maxSec = 8, autoStopTimer = null;
+
+  // 遅延ミラー
+  let delayOn = false, delayMs = 4000, rafId = 0;
+  let ring = [], ringSize = 0, ringIdx = 0, capW = 0, capH = 0, lastCap = 0;
+  const CAP_FPS = 20, MAX_DELAY_S = 6;
+
+  function setBadge(state, text){ badge.className = state; badgeText.textContent = text; }
+  function isMirror(){ return facing === 'user'; }
+  function applyMirror(){ video.classList.toggle('mirror', isMirror()); dcanvas.classList.toggle('mirror', isMirror()); }
+
+  async function startCamera(){
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: facing, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60} }
+    });
+    applyMirror();
+    if (uiMode === 'delay') enterDelay(); else goLive();
+  }
+
+  /* ---------- 録画モード ---------- */
+  function goLive(){
+    recState = 'live';
+    if (playbackURL){ URL.revokeObjectURL(playbackURL); playbackURL = null; }
+    video.loop = false; video.muted = true;
+    video.srcObject = stream; video.src = ''; video.playbackRate = 1;
+    video.play().catch(()=>{});
+    recBtn.classList.remove('active');
+    setBadge('live', 'ライブ');
+    hint.textContent = '録画ボタンでスイングを撮影 → 停止で自動スロー再生';
+  }
+
+  function pickMime(){
+    const list = ['video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    for (const m of list) if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+    return '';
+  }
+
+  function startRecording(){
+    if (recState !== 'live') goLive();
+    chunks = [];
+    const mime = pickMime();
+    try { recorder = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined); }
+    catch(e){ hint.textContent = '録画に対応していない可能性があります: ' + e.message; return; }
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = onRecordingStop;
+    recorder.start();
+    recording = true;
+    recBtn.classList.add('active');
+    setBadge('rec', '録画中');
+    hint.textContent = 'もう一度押すと停止（' + maxSec + '秒で自動停止）';
+    autoStopTimer = setTimeout(stopRecording, maxSec*1000);
+  }
+
+  function stopRecording(){
+    if (!recording) return;
+    clearTimeout(autoStopTimer);
+    recording = false;
+    recBtn.classList.remove('active');
+    try { recorder.stop(); } catch(e){}
+  }
+
+  function onRecordingStop(){
+    if (!chunks.length){ goLive(); return; }
+    const blob = new Blob(chunks, { type: chunks[0].type || 'video/webm' });
+    if (playbackURL) URL.revokeObjectURL(playbackURL);
+    playbackURL = URL.createObjectURL(blob);
+    recState = 'playback';
+    video.srcObject = null; video.src = playbackURL;
+    video.loop = true; video.muted = true; video.playbackRate = playSpeed;
+    video.play().catch(()=>{});
+    setBadge('play', '再生中 ' + playSpeed + 'x');
+    hint.textContent = '繰り返し再生中。スピード変更や「ライブ」で撮り直せます';
+  }
+
+  /* ---------- 遅延ミラー ---------- */
+  function initRing(){
+    const vw = video.videoWidth || 640, vh = video.videoHeight || 360;
+    const scale = Math.min(1, 640 / Math.max(vw, vh));
+    capW = Math.max(2, Math.round(vw*scale));
+    capH = Math.max(2, Math.round(vh*scale));
+    dcanvas.width = capW; dcanvas.height = capH;
+    ringSize = Math.ceil(CAP_FPS * (MAX_DELAY_S + 0.5));
+    ring = [];
+    for (let i=0;i<ringSize;i++){
+      const c = document.createElement('canvas'); c.width = capW; c.height = capH;
+      ring.push({ canvas:c, ctx:c.getContext('2d'), t:-1 });
+    }
+    ringIdx = 0; lastCap = 0;
+  }
+
+  function enterDelay(){
+    // ライブ映像を裏で流しつつ、canvasに遅延描画
+    if (recState !== 'live') goLive();
+    video.classList.add('hidden');
+    dcanvas.classList.remove('hidden');
+    delayOn = true;
+    setBadge('wait', 'バッファ中…');
+    hint.textContent = '数秒遅れで映ります。スイングしてから画面を見てください';
+    const begin = () => { initRing(); cancelAnimationFrame(rafId); rafId = requestAnimationFrame(delayLoop); };
+    if (video.videoWidth) begin();
+    else video.addEventListener('loadedmetadata', begin, { once:true });
+  }
+
+  function exitDelay(){
+    delayOn = false;
+    cancelAnimationFrame(rafId);
+    dcanvas.classList.add('hidden');
+    video.classList.remove('hidden');
+    ring = [];   // メモリ解放
+  }
+
+  function delayLoop(now){
+    if (!delayOn) return;
+    if (now - lastCap >= 1000/CAP_FPS){
+      lastCap = now;
+      const slot = ring[ringIdx % ringSize];
+      try { slot.ctx.drawImage(video, 0, 0, capW, capH); slot.t = now; ringIdx++; } catch(e){}
+    }
+    const target = now - delayMs;
+    let best = null, bestDiff = Infinity, earliest = Infinity;
+    for (const s of ring){
+      if (s.t < 0) continue;
+      if (s.t < earliest) earliest = s.t;
+      const d = Math.abs(s.t - target);
+      if (s.t <= now && d < bestDiff){ bestDiff = d; best = s; }
+    }
+    if (best && earliest <= target){
+      dctx.drawImage(best.canvas, 0, 0, capW, capH);
+      if (badge.className !== 'play'){ setBadge('play', '遅延 ' + (delayMs/1000) + '秒'); }
+    } else {
+      dctx.drawImage(video, 0, 0, capW, capH);   // まだ足りない間はライブ
+    }
+    rafId = requestAnimationFrame(delayLoop);
+  }
+
+  /* ---------- モード切替 ---------- */
+  function setUiMode(m){
+    uiMode = m;
+    modeRecordBtn.classList.toggle('on', m==='record');
+    modeDelayBtn.classList.toggle('on', m==='delay');
+    speedsEl.classList.toggle('hidden', m!=='record');
+    delaysEl.classList.toggle('hidden', m!=='delay');
+    if (m==='record'){
+      recBtn.classList.remove('hidden');
+      liveLabel.textContent = 'ライブ';
+      exitDelay();
+      goLive();
+    } else {
+      if (recording) stopRecording();
+      recBtn.classList.add('hidden');   // 遅延モードは常時表示なので録画ボタン不要
+      liveLabel.textContent = '再開';
+      enterDelay();
+    }
+  }
+
+  /* ---------- イベント ---------- */
+  startBtn.addEventListener('click', async () => {
+    errEl.textContent = '';
+    try { await startCamera(); startEl.style.display = 'none'; }
+    catch(e){ errEl.textContent = 'カメラを起動できませんでした: ' + e.message +
+      '（HTTPSまたはlocalhostで開き、カメラを許可してください）'; }
+  });
+
+  modeRecordBtn.addEventListener('click', () => { if (uiMode!=='record') setUiMode('record'); });
+  modeDelayBtn .addEventListener('click', () => { if (uiMode!=='delay')  setUiMode('delay'); });
+
+  recBtn.addEventListener('click', () => {
+    if (uiMode!=='record') return;
+    if (recording) stopRecording(); else startRecording();
+  });
+
+  liveBtn.addEventListener('click', () => {
+    if (uiMode==='record'){ if (recording) stopRecording(); goLive(); }
+    else { exitDelay(); enterDelay(); }   // 遅延モードは再バッファ
+  });
+
+  flipBtn.addEventListener('click', async () => {
+    facing = (facing==='environment') ? 'user' : 'environment';
+    try { await startCamera(); }
+    catch(e){ hint.textContent = 'カメラ切替に失敗: ' + e.message; }
+  });
+
+  speedBtns.forEach(b => b.addEventListener('click', () => {
+    speedBtns.forEach(x => x.classList.remove('on')); b.classList.add('on');
+    playSpeed = parseFloat(b.dataset.speed);
+    if (recState==='playback'){ video.playbackRate = playSpeed; setBadge('play','再生中 '+playSpeed+'x'); }
+  }));
+
+  delayBtns.forEach(b => b.addEventListener('click', () => {
+    delayBtns.forEach(x => x.classList.remove('on')); b.classList.add('on');
+    delayMs = parseInt(b.dataset.delay, 10);
+  }));
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && stream){
+      if (uiMode==='record' && recState==='live') video.play().catch(()=>{});
+      if (uiMode==='delay') video.play().catch(()=>{});
+    }
+  });
+})();
+</script>
