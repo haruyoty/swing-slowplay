@@ -105,7 +105,7 @@
 
 <div id="start">
   <h1>⛳ スイング再生ツール</h1>
-  <p>スイングを自動検出して、その場でスロー再生します。「開始」を押してカメラの使用を許可してください。三脚などでスマホを固定すると自動検出がより安定します。</p>
+  <p>アドレスして静止すると自動で撮影スタンバイ→スイングを検出してスロー再生します。再生後は次のアドレスを取れば自動で次のスイングを撮影します。「開始」を押してカメラを許可してください。スマホは三脚などで固定してください。</p>
   <button id="startBtn">開始</button>
   <div id="err"></div>
 </div>
@@ -139,12 +139,13 @@
   const detCanvas=document.createElement('canvas'); detCanvas.width=DW; detCanvas.height=DH;
   const detCtx=detCanvas.getContext('2d', { willReadFrequently:true });
   let prevGray=null, curGray=new Float32Array(DW*DH), lastMotion=0;
-  let autoState='idle';        // 'arming' | 'recording' | 'playing'
-  let swingStart=0, lastHigh=0, playRaf=0;
+  let autoState='idle';        // 'address' | 'ready' | 'recording' | 'playing'
+  let swingStart=0, lastHigh=0, playRaf=0, stillStart=0;
   let clipFrames=[];
   const SENS={ high:{start:2.2}, mid:{start:3.6}, low:{start:5.5} };
   let startThresh=SENS.mid.start, endThresh=startThresh*0.5;
   const PRE_ROLL=900, POST_ROLL=900, END_HOLD=900, MIN_SWING=300, MAX_LOOPS=3, MAX_SWING=6000;
+  const STILL_THRESH=1.1, STILL_MS=600;   // アドレス（静止）判定
 
   function setBadge(s,t){ badge.className=s; badgeText.textContent=t; }
   function isMirror(){ return facing==='user'; }
@@ -234,16 +235,16 @@
   function enterAuto(){
     if (recState!=='live') goLive();
     video.classList.add('hidden'); dcanvas.classList.remove('hidden'); meter.classList.remove('hidden');
-    whenReady(()=>{ initRing(AUTO_FPS, AUTO_SECONDS); prevGray=null; startArming(); });
+    whenReady(()=>{ initRing(AUTO_FPS, AUTO_SECONDS); prevGray=null; startWaitAddress(); });
   }
   function exitAuto(){ cancelAnimationFrame(rafId); cancelAnimationFrame(playRaf); autoState='idle';
     dcanvas.classList.add('hidden'); video.classList.remove('hidden'); meter.classList.add('hidden'); clipFrames=[]; }
 
-  function startArming(){
+  function startWaitAddress(){
     cancelAnimationFrame(playRaf);
-    autoState='arming'; swingStart=0; lastHigh=0; prevGray=null;
-    setBadge('wait','スイング待機中');
-    hint.textContent='スイングすると自動で検出→スロー再生します';
+    autoState='address'; swingStart=0; lastHigh=0; stillStart=0; prevGray=null;
+    setBadge('wait','アドレス待ち…');
+    hint.textContent='アドレスして構えて静止してください';
     cancelAnimationFrame(rafId); rafId=requestAnimationFrame(autoLoop);
   }
 
@@ -278,7 +279,14 @@
   }
 
   function handleState(m, now){
-    if (autoState==='arming'){
+    if (autoState==='address'){
+      // 静止が STILL_MS 続いたらアドレス確立
+      if (m < STILL_THRESH){
+        if (!stillStart) stillStart=now;
+        else if (now-stillStart>=STILL_MS){ autoState='ready';
+          setBadge('live','アドレスOK・どうぞ'); hint.textContent='そのままスイングしてください'; }
+      } else stillStart=0;
+    } else if (autoState==='ready'){
       if (m>=startThresh){ autoState='recording'; swingStart=now; lastHigh=now;
         setBadge('rec','スイング検出中'); hint.textContent='検出中…'; }
     } else if (autoState==='recording'){
@@ -286,7 +294,7 @@
       if (now-lastHigh>=END_HOLD){
         const dur=lastHigh-swingStart;
         if (dur>=MIN_SWING) finalizeClip(now);
-        else startArming();     // 誤検出は破棄して再待機
+        else startWaitAddress();     // 誤検出は破棄して再待機
       } else if (now-swingStart>MAX_SWING){ finalizeClip(now); } // 長すぎる場合は打ち切り
     }
   }
@@ -294,7 +302,7 @@
   function finalizeClip(now){
     const from=swingStart-PRE_ROLL, to=lastHigh+POST_ROLL;
     const frames=ring.filter(s=>s.t>=from && s.t<=Math.min(to,now)).sort((a,b)=>a.t-b.t);
-    if (frames.length<3){ startArming(); return; }
+    if (frames.length<3){ startWaitAddress(); return; }
     clipFrames=frames;
     playClip();
   }
@@ -311,7 +319,7 @@
     function loop(now){
       if (autoState!=='playing') return;
       let vt=(now-segStart)*playSpeed;
-      if (vt>=clipDur){ loops++; if (loops>=MAX_LOOPS){ startArming(); return; } segStart=now; vt=0; }
+      if (vt>=clipDur){ loops++; if (loops>=MAX_LOOPS){ startWaitAddress(); return; } segStart=now; vt=0; }
       const target=clipStart+vt;
       let best=clipFrames[0];
       for (const f of clipFrames){ if (f.t<=target) best=f; else break; }
@@ -355,7 +363,7 @@
   liveBtn.addEventListener('click', ()=>{
     if (uiMode==='record'){ if(recording) stopRecording(); goLive(); }
     else if (uiMode==='delay'){ exitDelay(); enterDelay(); }
-    else { startArming(); }   // 自動：手動で待機に戻す
+    else { startWaitAddress(); }   // 自動：手動で待機に戻す
   });
   flipBtn.addEventListener('click', async ()=>{ facing=(facing==='environment')?'user':'environment';
     try{ await startCamera(); }catch(e){ hint.textContent='カメラ切替に失敗: '+e.message; } });
