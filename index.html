@@ -86,6 +86,7 @@
   <button id="startBtn">開始（再試行）</button>
   <div id="err"></div>
 </div>
+<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v7</div>
 
 <script>
 (() => {
@@ -102,7 +103,7 @@
   let playSpeed=0.5;
 
   // フレームのリングバッファ
-  let ring=[], ringSize=0, ringIdx=0, capW=0, capH=0, lastCap=0, rafId=0;
+  let ring=[], ringSize=0, ringIdx=0, capW=0, capH=0;
 
   // 動き検出
   const AUTO_FPS=30, AUTO_SECONDS=8, DW=64, DH=36;
@@ -112,7 +113,8 @@
 
   // 状態: 'address'(アドレス待ち) | 'ready'(スタンバイ) | 'recording'(スイング収録) | 'playing'(再生)
   let autoState='idle';
-  let swingStart=0, lastHigh=0, playRaf=0, stillStart=0, addressStart=0;
+  let swingStart=0, lastHigh=0, stillStart=0, addressStart=0;
+  let tickTimer=0, playTimer=0;
   let clipFrames=[];
 
   const SENS={ high:{start:2.5}, mid:{start:5}, low:{start:9} };   // 変化ピクセル%のしきい値
@@ -142,15 +144,15 @@
     ringSize=Math.ceil(AUTO_FPS*(AUTO_SECONDS+0.5)); ring=[];
     for(let i=0;i<ringSize;i++){ const c=document.createElement('canvas'); c.width=capW; c.height=capH;
       ring.push({ canvas:c, ctx:c.getContext('2d'), t:-1 }); }
-    ringIdx=0; lastCap=0;
+    ringIdx=0;
   }
 
   function startWaitAddress(){
-    cancelAnimationFrame(playRaf);
+    clearInterval(playTimer); clearInterval(tickTimer);
     autoState='address'; swingStart=0; lastHigh=0; stillStart=0; addressStart=0; prevGray=null;
     setBadge('wait','アドレス待ち…');
     hint.textContent='アドレスして構えて静止してください';
-    cancelAnimationFrame(rafId); rafId=requestAnimationFrame(autoLoop);
+    tickTimer=setInterval(tick, 1000/AUTO_FPS);
   }
 
   function computeMotion(){
@@ -167,20 +169,19 @@
     return m;
   }
 
-  function autoLoop(now){
+  function tick(){
     if (autoState==='playing' || autoState==='idle') return;
-    if (now-lastCap >= 1000/AUTO_FPS){
-      lastCap=now;
-      const s=ring[ringIdx%ringSize];
-      try{ s.ctx.drawImage(video,0,0,capW,capH); s.t=now; ringIdx++; }catch(e){}
+    const now=performance.now();
+    const s=ring[ringIdx%ringSize];
+    try{
+      s.ctx.drawImage(video,0,0,capW,capH); s.t=now; ringIdx++;
       lastMotion=computeMotion();
-      const pct=Math.min(100, lastMotion/startThresh*70);
-      meterFill.style.width=pct+'%';
-      meter.classList.toggle('hot', lastMotion>=startThresh);
-      handleState(lastMotion, now);
-    }
-    dctx.drawImage(video,0,0,capW,capH);
-    if (autoState!=='playing') rafId=requestAnimationFrame(autoLoop);
+      dctx.drawImage(video,0,0,capW,capH);
+    }catch(e){ return; }
+    const pct=Math.min(100, lastMotion/startThresh*70);
+    meterFill.style.width=pct+'%';
+    meter.classList.toggle('hot', lastMotion>=startThresh);
+    handleState(lastMotion, now);
   }
 
   function handleState(m, now){
@@ -216,7 +217,7 @@
   }
 
   function playClip(){
-    cancelAnimationFrame(rafId);
+    clearInterval(tickTimer);
     autoState='playing';
     const clipStart=clipFrames[0].t;
     const clipDur=Math.max(1, clipFrames[clipFrames.length-1].t - clipStart);
@@ -224,8 +225,10 @@
     setBadge('play','スロー再生 '+playSpeed+'x');
     hint.textContent='スイングを再生中（自動で次のアドレス待ちに戻ります）';
     meterFill.style.width='0%'; meter.classList.remove('hot');
-    function loop(now){
-      if (autoState!=='playing') return;
+    clearInterval(playTimer);
+    playTimer=setInterval(()=>{
+      if (autoState!=='playing'){ clearInterval(playTimer); return; }
+      const now=performance.now();
       let vt=(now-segStart)*playSpeed;
       if (vt>=clipDur){ loops++; if (loops>=MAX_LOOPS){ startWaitAddress(); return; } segStart=now; vt=0; }
       const target=clipStart+vt;
@@ -233,9 +236,7 @@
       for (const f of clipFrames){ if (f.t<=target) best=f; else break; }
       dctx.drawImage(best.canvas,0,0,capW,capH);
       setBadge('play','スロー再生 '+playSpeed+'x');
-      playRaf=requestAnimationFrame(loop);
-    }
-    playRaf=requestAnimationFrame(loop);
+    }, 1000/AUTO_FPS);
   }
 
   /* ---------- イベント ---------- */
