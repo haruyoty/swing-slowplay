@@ -105,8 +105,8 @@
 
 <div id="start">
   <h1>⛳ スイング再生ツール</h1>
-  <p>アドレスして静止すると自動で撮影スタンバイ→スイングを検出してスロー再生します。再生後は次のアドレスを取れば自動で次のスイングを撮影します。「開始」を押してカメラを許可してください。スマホは三脚などで固定してください。</p>
-  <button id="startBtn">開始</button>
+  <p>カメラを許可すると、すぐにアドレス検出が始まります。アドレスして静止→スイングすると自動で撮影・スロー再生。再生後は次のアドレスを取れば自動で次のスイングを撮影します。スマホは三脚などで固定してください。</p>
+  <button id="startBtn">開始（再試行）</button>
   <div id="err"></div>
 </div>
 
@@ -142,10 +142,12 @@
   let autoState='idle';        // 'address' | 'ready' | 'recording' | 'playing'
   let swingStart=0, lastHigh=0, playRaf=0, stillStart=0;
   let clipFrames=[];
-  const SENS={ high:{start:2.2}, mid:{start:3.6}, low:{start:5.5} };
+  const SENS={ high:{start:2.5}, mid:{start:5}, low:{start:9} };   // 変化ピクセル%のしきい値
   let startThresh=SENS.mid.start, endThresh=startThresh*0.5;
-  const PRE_ROLL=900, POST_ROLL=900, END_HOLD=900, MIN_SWING=300, MAX_LOOPS=3, MAX_SWING=6000;
-  const STILL_THRESH=1.1, STILL_MS=600;   // アドレス（静止）判定
+  const PRE_ROLL=1500, POST_ROLL=900, END_HOLD=900, MIN_SWING=300, MAX_LOOPS=3, MAX_SWING=6000;
+  const STILL_THRESH=1.0, STILL_MS=600;   // アドレス（静止）判定
+  const ADDRESS_TIMEOUT=10000;            // 静止が取れなくても10秒でスタンバイへ
+  let addressStart=0;
 
   function setBadge(s,t){ badge.className=s; badgeText.textContent=t; }
   function isMirror(){ return facing==='user'; }
@@ -242,21 +244,22 @@
 
   function startWaitAddress(){
     cancelAnimationFrame(playRaf);
-    autoState='address'; swingStart=0; lastHigh=0; stillStart=0; prevGray=null;
+    autoState='address'; swingStart=0; lastHigh=0; stillStart=0; addressStart=0; prevGray=null;
     setBadge('wait','アドレス待ち…');
     hint.textContent='アドレスして構えて静止してください';
     cancelAnimationFrame(rafId); rafId=requestAnimationFrame(autoLoop);
   }
 
   function computeMotion(){
+    // 「変化したピクセルの割合(%)」で動きを測る（ノイズに強い）
     detCtx.drawImage(video,0,0,DW,DH);
-    const d=detCtx.getImageData(0,0,DW,DH).data; let sum=0;
+    const d=detCtx.getImageData(0,0,DW,DH).data; let changed=0;
     for(let i=0,idx=0;i<d.length;i+=4,idx++){
       const g=d[i]*0.3+d[i+1]*0.59+d[i+2]*0.11;
-      if(prevGray) sum+=Math.abs(g-prevGray[idx]);
+      if(prevGray && Math.abs(g-prevGray[idx])>28) changed++;
       curGray[idx]=g;
     }
-    const m = prevGray ? (sum/(DW*DH))/255*100 : 0;
+    const m = prevGray ? changed/(DW*DH)*100 : 0;
     const tmp=prevGray; prevGray=curGray; curGray=tmp||new Float32Array(DW*DH);
     return m;
   }
@@ -280,12 +283,15 @@
 
   function handleState(m, now){
     if (autoState==='address'){
-      // 静止が STILL_MS 続いたらアドレス確立
+      if (!addressStart) addressStart=now;
+      // 静止が STILL_MS 続いたらアドレス確立（取れなくても10秒でスタンバイ）
       if (m < STILL_THRESH){
         if (!stillStart) stillStart=now;
         else if (now-stillStart>=STILL_MS){ autoState='ready';
           setBadge('live','アドレスOK・どうぞ'); hint.textContent='そのままスイングしてください'; }
       } else stillStart=0;
+      if (autoState==='address' && now-addressStart>=ADDRESS_TIMEOUT){ autoState='ready';
+        setBadge('live','スタンバイ・どうぞ'); hint.textContent='スイングすると自動で撮影します'; }
     } else if (autoState==='ready'){
       if (m>=startThresh){ autoState='recording'; swingStart=now; lastHigh=now;
         setBadge('rec','スイング検出中'); hint.textContent='検出中…'; }
@@ -350,11 +356,13 @@
   }
 
   /* ---------- イベント ---------- */
-  startBtn.addEventListener('click', async () => {
+  async function boot(){
     errEl.textContent='';
     try{ await startCamera(); startEl.style.display='none'; }
     catch(e){ errEl.textContent='カメラを起動できませんでした: '+e.message+'（HTTPSまたはlocalhostで開き、カメラを許可してください）'; }
-  });
+  }
+  startBtn.addEventListener('click', boot);
+  boot();   // 起動したら即カメラ開始→アドレス検出へ（失敗時は「開始」で再試行）
   modeAutoBtn.addEventListener('click', ()=>setUiMode('auto'));
   modeRecordBtn.addEventListener('click', ()=>setUiMode('record'));
   modeDelayBtn.addEventListener('click', ()=>setUiMode('delay'));
