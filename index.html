@@ -86,7 +86,7 @@
   <button id="startBtn">開始（再試行）</button>
   <div id="err"></div>
 </div>
-<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v10</div>
+<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v13</div>
 
 <script>
 (() => {
@@ -121,7 +121,7 @@
 
   const SENS={ high:{start:2.5}, mid:{start:5}, low:{start:9} };   // 変化ピクセル%のしきい値
   let startThresh=SENS.mid.start, endThresh=startThresh*0.5;
-  const PRE_ROLL=1500, POST_ROLL=900, END_HOLD=900, MIN_SWING=300, MAX_LOOPS=3, MAX_SWING=6000;
+  const PRE_ROLL=1500, POST_ROLL=900, END_HOLD=900, MIN_SWING=300, MAX_SWING=6000, PLAY_LOOPS=3;
   const STILL_THRESH=1.0, STILL_MS=600;   // アドレス（静止）判定
   const ADDRESS_TIMEOUT=10000;            // 静止が取れなくても10秒でスタンバイへ
 
@@ -225,7 +225,7 @@
       } else if (playPhase==='moving'){
         if (m < STILL_THRESH){
           if (!stillStart) stillStart=now;
-          else if (now-stillStart>=STILL_MS){                // 次のアドレス成立
+          else if (now-stillStart>=STILL_MS){                // 次のアドレス成立→再生中断してスタンバイ
             clearInterval(playTimer); stillStart=0;
             autoState='ready';
             setBadge('live','アドレスOK・どうぞ'); hint.textContent='そのままスイングしてください';
@@ -251,19 +251,20 @@
     const clipDur=Math.max(1, clipFrames[clipFrames.length-1].t - clipStart);
     let loops=0, segStart=performance.now();
     setBadge('play','スロー再生 '+playSpeed+'x');
-    hint.textContent='スイングを再生中（自動で次のアドレス待ちに戻ります）';
+    hint.textContent='スロー再生中（'+PLAY_LOOPS+'回再生したら次のアドレス待ちに戻ります）';
     meterFill.style.width='0%'; meter.classList.remove('hot');
     clearInterval(playTimer);
     playTimer=setInterval(()=>{
       if (autoState!=='playing'){ clearInterval(playTimer); return; }
       const now=performance.now();
       let vt=(now-segStart)*playSpeed;
-      if (vt>=clipDur){ loops++; playedOnce=true; if (loops>=MAX_LOOPS){ startWaitAddress(); return; } segStart=now; vt=0; }
+      if (vt>=clipDur){ loops++; playedOnce=true;   // 1回再生し終えたらアドレス検知を有効化
+        if (loops>=PLAY_LOOPS){ startWaitAddress(); return; }  // 指定回数再生したらライブに戻し次のアドレスを検知
+        segStart=now; vt=0; }
       const target=clipStart+vt;
       let best=clipFrames[0];
       for (const f of clipFrames){ if (f.t<=target) best=f; else break; }
       dctx.drawImage(best.canvas,0,0,capW,capH);
-      setBadge('play','スロー再生 '+playSpeed+'x');
     }, 1000/AUTO_FPS);
   }
 
