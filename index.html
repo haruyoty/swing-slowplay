@@ -86,7 +86,7 @@
   <button id="startBtn">開始（再試行）</button>
   <div id="err"></div>
 </div>
-<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v9</div>
+<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v10</div>
 
 <script>
 (() => {
@@ -115,6 +115,7 @@
   let autoState='idle';
   let swingStart=0, lastHigh=0, stillStart=0, addressStart=0;
   let playPhase='settle';   // 再生中のサブ状態: settle(余韻)→waitmove(次の動き待ち)→moving(動作中)
+  let playedOnce=false;     // スロー再生を最低1回見せたか（それまでアドレス検知しない）
   let masterTimer=0, playTimer=0;
   let clipFrames=[];
 
@@ -213,6 +214,8 @@
         else startWaitAddress();     // 誤検出は破棄して再待機
       } else if (now-swingStart>MAX_SWING){ finalizeClip(now); } // 長すぎる場合は打ち切り
     } else if (autoState==='playing'){
+      // 最低1回スロー再生を見せてからアドレス検知を有効化する
+      if (!playedOnce) return;
       // 再生中に「次のアドレス」を検出したら再生を終えてスタンバイへ。
       // フィニッシュ直後の静止を誤検出しないよう、一度動いてから静止した時だけアドレス成立とする。
       if (playPhase==='settle'){
@@ -243,7 +246,7 @@
   }
 
   function playClip(){
-    autoState='playing'; playPhase='settle'; stillStart=0;
+    autoState='playing'; playPhase='settle'; stillStart=0; playedOnce=false;
     const clipStart=clipFrames[0].t;
     const clipDur=Math.max(1, clipFrames[clipFrames.length-1].t - clipStart);
     let loops=0, segStart=performance.now();
@@ -255,7 +258,7 @@
       if (autoState!=='playing'){ clearInterval(playTimer); return; }
       const now=performance.now();
       let vt=(now-segStart)*playSpeed;
-      if (vt>=clipDur){ loops++; if (loops>=MAX_LOOPS){ startWaitAddress(); return; } segStart=now; vt=0; }
+      if (vt>=clipDur){ loops++; playedOnce=true; if (loops>=MAX_LOOPS){ startWaitAddress(); return; } segStart=now; vt=0; }
       const target=clipStart+vt;
       let best=clipFrames[0];
       for (const f of clipFrames){ if (f.t<=target) best=f; else break; }
