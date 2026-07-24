@@ -86,7 +86,7 @@
   <button id="startBtn">開始（再試行）</button>
   <div id="err"></div>
 </div>
-<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v7</div>
+<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v9</div>
 
 <script>
 (() => {
@@ -114,7 +114,8 @@
   // 状態: 'address'(アドレス待ち) | 'ready'(スタンバイ) | 'recording'(スイング収録) | 'playing'(再生)
   let autoState='idle';
   let swingStart=0, lastHigh=0, stillStart=0, addressStart=0;
-  let tickTimer=0, playTimer=0;
+  let playPhase='settle';   // 再生中のサブ状態: settle(余韻)→waitmove(次の動き待ち)→moving(動作中)
+  let masterTimer=0, playTimer=0;
   let clipFrames=[];
 
   const SENS={ high:{start:2.5}, mid:{start:5}, low:{start:9} };   // 変化ピクセル%のしきい値
@@ -132,7 +133,7 @@
       audio:false, video:{ facingMode:facing, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60} }});
     applyMirror();
     video.srcObject=stream; video.play().catch(()=>{});
-    whenReady(()=>{ initRing(); startWaitAddress(); });
+    whenReady(()=>{ initRing(); startEngine(); startWaitAddress(); });
   }
   function whenReady(fn){ if (video.videoWidth) fn(); else video.addEventListener('loadedmetadata', fn, {once:true}); }
 
@@ -147,12 +148,18 @@
     ringIdx=0;
   }
 
+  // 常時動くエンジン（アドレス検出・収録・再生中の新スイング監視すべてを担う）
+  function startEngine(){
+    clearInterval(masterTimer);
+    masterTimer=setInterval(masterTick, 1000/AUTO_FPS);
+  }
+
   function startWaitAddress(){
-    clearInterval(playTimer); clearInterval(tickTimer);
+    clearInterval(playTimer);
     autoState='address'; swingStart=0; lastHigh=0; stillStart=0; addressStart=0; prevGray=null;
     setBadge('wait','アドレス待ち…');
     hint.textContent='アドレスして構えて静止してください';
-    tickTimer=setInterval(tick, 1000/AUTO_FPS);
+    if (!masterTimer) startEngine();
   }
 
   function computeMotion(){
@@ -169,14 +176,14 @@
     return m;
   }
 
-  function tick(){
-    if (autoState==='playing' || autoState==='idle') return;
+  function masterTick(){
+    if (autoState==='idle') return;
     const now=performance.now();
     const s=ring[ringIdx%ringSize];
     try{
-      s.ctx.drawImage(video,0,0,capW,capH); s.t=now; ringIdx++;
+      s.ctx.drawImage(video,0,0,capW,capH); s.t=now; ringIdx++;   // 再生中もリング収録は継続
       lastMotion=computeMotion();
-      dctx.drawImage(video,0,0,capW,capH);
+      if (autoState!=='playing') dctx.drawImage(video,0,0,capW,capH);   // 再生中の描画は playTimer が担当
     }catch(e){ return; }
     const pct=Math.min(100, lastMotion/startThresh*70);
     meterFill.style.width=pct+'%';
@@ -205,20 +212,38 @@
         if (dur>=MIN_SWING) finalizeClip(now);
         else startWaitAddress();     // 誤検出は破棄して再待機
       } else if (now-swingStart>MAX_SWING){ finalizeClip(now); } // 長すぎる場合は打ち切り
+    } else if (autoState==='playing'){
+      // 再生中に「次のアドレス」を検出したら再生を終えてスタンバイへ。
+      // フィニッシュ直後の静止を誤検出しないよう、一度動いてから静止した時だけアドレス成立とする。
+      if (playPhase==='settle'){
+        if (m < STILL_THRESH) playPhase='waitmove';        // スイングの余韻が収まった
+      } else if (playPhase==='waitmove'){
+        if (m >= endThresh){ playPhase='moving'; stillStart=0; }  // 次の準備で動き出した
+      } else if (playPhase==='moving'){
+        if (m < STILL_THRESH){
+          if (!stillStart) stillStart=now;
+          else if (now-stillStart>=STILL_MS){                // 次のアドレス成立
+            clearInterval(playTimer); stillStart=0;
+            autoState='ready';
+            setBadge('live','アドレスOK・どうぞ'); hint.textContent='そのままスイングしてください';
+          }
+        } else stillStart=0;
+      }
     }
   }
 
   function finalizeClip(now){
     const from=swingStart-PRE_ROLL, to=lastHigh+POST_ROLL;
-    const frames=ring.filter(s=>s.t>=from && s.t<=Math.min(to,now)).sort((a,b)=>a.t-b.t);
-    if (frames.length<3){ startWaitAddress(); return; }
-    clipFrames=frames;
+    const src=ring.filter(s=>s.t>=from && s.t<=Math.min(to,now)).sort((a,b)=>a.t-b.t);
+    if (src.length<3){ startWaitAddress(); return; }
+    // リングと切り離してコピー（再生中もリング収録＝新スイング検出を続けられるように）
+    clipFrames=src.map(s=>{ const c=document.createElement('canvas'); c.width=capW; c.height=capH;
+      c.getContext('2d').drawImage(s.canvas,0,0); return { canvas:c, t:s.t }; });
     playClip();
   }
 
   function playClip(){
-    clearInterval(tickTimer);
-    autoState='playing';
+    autoState='playing'; playPhase='settle'; stillStart=0;
     const clipStart=clipFrames[0].t;
     const clipDur=Math.max(1, clipFrames[clipFrames.length-1].t - clipStart);
     let loops=0, segStart=performance.now();
