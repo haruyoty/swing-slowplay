@@ -70,8 +70,8 @@
   <div class="pills" id="sens">
     <span class="label">感度</span>
     <button data-sens="high">高</button>
-    <button data-sens="mid" class="on">中</button>
-    <button data-sens="low">低</button>
+    <button data-sens="mid">中</button>
+    <button data-sens="low" class="on">低</button>
   </div>
 
   <div class="row">
@@ -86,7 +86,7 @@
   <button id="startBtn">開始（再試行）</button>
   <div id="err"></div>
 </div>
-<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v15</div>
+<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v16</div>
 
 <script>
 (() => {
@@ -99,7 +99,7 @@
   const speedBtns=[...$('#speeds').querySelectorAll('button')];
   const sensBtns=[...$('#sens').querySelectorAll('button')];
 
-  let stream=null, facing='environment';
+  let stream=null, facing='user';   // 起動時はインカメラ（前面）
   let playSpeed=0.5;
 
   // フレームのリングバッファ
@@ -114,12 +114,12 @@
   // 状態: 'address'(アドレス待ち) | 'ready'(スタンバイ) | 'recording'(スイング収録) | 'playing'(再生)
   let autoState='idle';
   let swingStart=0, lastHigh=0, stillStart=0, addressStart=0;
-  let playedOnce=false;     // スロー再生を最低1回見せたか（それまで次スイングを検知しない）
+  let playArmed=false;      // 再生中: フィニッシュの動きが一旦収まって次スイングを検知可能か
   let masterTimer=0, playTimer=0;
   let clipFrames=[];
 
   const SENS={ high:{start:2.5}, mid:{start:5}, low:{start:9} };   // 変化ピクセル%のしきい値
-  let startThresh=SENS.mid.start, endThresh=startThresh*0.5;
+  let startThresh=SENS.low.start, endThresh=startThresh*0.5;   // 既定は感度「低」
   const PRE_ROLL=1500, POST_ROLL=900, END_HOLD=900, MIN_SWING=300, MAX_SWING=6000, PLAY_LOOPS=3;
   const STILL_THRESH=1.0, STILL_MS=600;   // アドレス（静止）判定
   const ADDRESS_TIMEOUT=10000;            // 静止が取れなくても10秒でスタンバイへ
@@ -213,9 +213,9 @@
         else startWaitAddress();     // 誤検出は破棄して再待機
       } else if (now-swingStart>MAX_SWING){ finalizeClip(now); } // 長すぎる場合は打ち切り
     } else if (autoState==='playing'){
-      // 最低1回スロー再生を見せてから、次のスイング検知を有効化する
-      // （1ループ＝数秒あるので前スイングの余韻はこの時点で完全に収まっている）
-      if (!playedOnce) return;
+      // 1回目の再生中でも検知する。ただし直前スイングのフィニッシュで即再トリガーしないよう、
+      // 動きが一旦収まってから（＝アドレスに入る準備ができてから）検知を有効化する。
+      if (!playArmed){ if (m < endThresh) playArmed=true; return; }
       // 再生は流し続けたまま、スイング（大きな動き）を検知した瞬間に撮影開始。
       // 構え（アドレス）はクリップ先頭のプリロール(PRE_ROLL)に自動で含まれる。
       if (m >= startThresh){
@@ -237,7 +237,7 @@
   }
 
   function playClip(){
-    autoState='playing'; stillStart=0; playedOnce=false;
+    autoState='playing'; stillStart=0; playArmed=false;
     const clipStart=clipFrames[0].t;
     const clipDur=Math.max(1, clipFrames[clipFrames.length-1].t - clipStart);
     let loops=0, segStart=performance.now();
@@ -249,7 +249,7 @@
       if (autoState!=='playing'){ clearInterval(playTimer); return; }
       const now=performance.now();
       let vt=(now-segStart)*playSpeed;
-      if (vt>=clipDur){ loops++; playedOnce=true;   // 1回再生し終えたらアドレス検知を有効化
+      if (vt>=clipDur){ loops++;
         if (loops>=PLAY_LOOPS){ startWaitAddress(); return; }  // 指定回数再生したらライブに戻し次のアドレスを検知
         segStart=now; vt=0; }
       const target=clipStart+vt;
