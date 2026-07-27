@@ -86,7 +86,7 @@
   <button id="startBtn">開始（再試行）</button>
   <div id="err"></div>
 </div>
-<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v13</div>
+<div style="position:fixed; right:8px; bottom:4px; font-size:10px; color:#666; z-index:11;">v15</div>
 
 <script>
 (() => {
@@ -114,8 +114,7 @@
   // 状態: 'address'(アドレス待ち) | 'ready'(スタンバイ) | 'recording'(スイング収録) | 'playing'(再生)
   let autoState='idle';
   let swingStart=0, lastHigh=0, stillStart=0, addressStart=0;
-  let playPhase='settle';   // 再生中のサブ状態: settle(余韻)→waitmove(次の動き待ち)→moving(動作中)
-  let playedOnce=false;     // スロー再生を最低1回見せたか（それまでアドレス検知しない）
+  let playedOnce=false;     // スロー再生を最低1回見せたか（それまで次スイングを検知しない）
   let masterTimer=0, playTimer=0;
   let clipFrames=[];
 
@@ -214,23 +213,15 @@
         else startWaitAddress();     // 誤検出は破棄して再待機
       } else if (now-swingStart>MAX_SWING){ finalizeClip(now); } // 長すぎる場合は打ち切り
     } else if (autoState==='playing'){
-      // 最低1回スロー再生を見せてからアドレス検知を有効化する
+      // 最低1回スロー再生を見せてから、次のスイング検知を有効化する
+      // （1ループ＝数秒あるので前スイングの余韻はこの時点で完全に収まっている）
       if (!playedOnce) return;
-      // 再生中に「次のアドレス」を検出したら再生を終えてスタンバイへ。
-      // フィニッシュ直後の静止を誤検出しないよう、一度動いてから静止した時だけアドレス成立とする。
-      if (playPhase==='settle'){
-        if (m < STILL_THRESH) playPhase='waitmove';        // スイングの余韻が収まった
-      } else if (playPhase==='waitmove'){
-        if (m >= endThresh){ playPhase='moving'; stillStart=0; }  // 次の準備で動き出した
-      } else if (playPhase==='moving'){
-        if (m < STILL_THRESH){
-          if (!stillStart) stillStart=now;
-          else if (now-stillStart>=STILL_MS){                // 次のアドレス成立→再生中断してスタンバイ
-            clearInterval(playTimer); stillStart=0;
-            autoState='ready';
-            setBadge('live','アドレスOK・どうぞ'); hint.textContent='そのままスイングしてください';
-          }
-        } else stillStart=0;
+      // 再生は流し続けたまま、スイング（大きな動き）を検知した瞬間に撮影開始。
+      // 構え（アドレス）はクリップ先頭のプリロール(PRE_ROLL)に自動で含まれる。
+      if (m >= startThresh){
+        clearInterval(playTimer);
+        autoState='recording'; swingStart=now; lastHigh=now;
+        setBadge('rec','スイング検出中'); hint.textContent='検出中…';
       }
     }
   }
@@ -246,7 +237,7 @@
   }
 
   function playClip(){
-    autoState='playing'; playPhase='settle'; stillStart=0; playedOnce=false;
+    autoState='playing'; stillStart=0; playedOnce=false;
     const clipStart=clipFrames[0].t;
     const clipDur=Math.max(1, clipFrames[clipFrames.length-1].t - clipStart);
     let loops=0, segStart=performance.now();
